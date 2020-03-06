@@ -217,7 +217,7 @@ contract iTrade is ReentrancyGuard, Ownable {
 
   address public constant collateral = address(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
 
-  uint256 public constant ltv = uint256(150);
+  uint256 public constant ltv = uint256(120);
   uint256 public constant base = uint256(100);
 
   // principal deposits
@@ -225,7 +225,6 @@ contract iTrade is ReentrancyGuard, Ownable {
   mapping (address => mapping (address => uint256)) public principals;
 
   // debt shares
-  mapping (address => uint256) public totalDebts;
   mapping (address => mapping (address => uint256)) public debts;
   mapping (address => uint256) public debtsTotalSupply;
 
@@ -403,12 +402,35 @@ contract iTrade is ReentrancyGuard, Ownable {
         yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
   }
-/*
-  function isSafe(address _reserve, address _user) public view returns (bool) {
-      uint256 debt = getUserDebt(_reserve, _user);
-      uint256 interest = getUSerInterest(_reserve, _user);
-      uint256 collateral = principals
-  }*/
+
+  function isSafe(address _user) public view returns (bool) {
+      uint256 debt = getAllDebt(_user);
+      uint256 positions = totalPositions[_user];
+      uint256 collateral = totalPrincipals[_user];
+      if (positions > debt) {
+        return true;
+      } else {
+        uint256 diff = debt.sub(positions);
+        uint256 adjDebt = diff.mul(ltv).div(base);
+        if (collateral > adjDebt) {
+          return true;
+        } else {
+          return false;
+        }
+      }
+
+  }
+
+  function seize(address _user) public {
+      require(isSafe(_user) == false, "itrade: account is safe");
+      // Pay off fees with collateral
+      // Take position (and debt)
+
+  }
+
+  function getAllDebt(address _user) public view returns (uint256) {
+    return getUserDebt(DAI, _user).add(getUserDebt(USDC, _user)).add(getUserDebt(USDT, _user));
+  }
 
   function getUserDebt(address _reserve, address _user) public view returns (uint256) {
       if (debtsTotalSupply[_reserve] == 0) {
@@ -428,11 +450,9 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(account != address(0), "DEBT: mint to the zero address");
       debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].add(amount);
       debts[_reserve][account] = debts[_reserve][account].add(amount);
-      totalDebts[account] = totalDebts[account].add(amount);
   }
   function _burnDebt(address _reserve, address account, uint256 amount) internal {
       require(account != address(0), "DEBT: burn from the zero address");
-      totalDebts[account] = totalDebts[account].sub(amount, "DEBT: burn amount exceeds balance");
       debts[_reserve][account] = debts[_reserve][account].sub(amount, "DEBT: burn amount exceeds balance");
       debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].sub(amount);
   }
