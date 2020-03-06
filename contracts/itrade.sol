@@ -291,7 +291,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function withdrawCollateral(address _reserve, uint256 _amount) external {
+  function withdrawCollateral(address _reserve, uint256 _amount) public {
       require(isReserve(_reserve) == true, "itrade: invalid reserve");
       require(getUserDebt(_reserve, msg.sender) == 0, "itrade: outstanding debt to settle");
 
@@ -315,28 +315,44 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function repayDebt(address _reserve, uint256 _amount) external {
-      require(isReserve(_reserve) == true, "itrade: invalid reserve");
+  function repayDebtFor(address _reserve, address _user, uint256 _amount) public {
+    require(isReserve(_reserve) == true, "itrade: invalid reserve");
 
-      uint256 debt = getUserDebt(_reserve, msg.sender);
+    uint256 debt = getUserDebt(_reserve, _user);
 
-      if (_amount > debt) {
-        _amount = debt;
-      }
+    if (_amount > debt) {
+      _amount = debt;
+    }
 
-      IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount);
-      uint256 shares = debts[_reserve][msg.sender].mul(_amount).div(debt);
-      borrower(collateral).repayAave(_reserve, _amount);
-      _burnDebt(_reserve, msg.sender, shares);
+    IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount);
+    uint256 shares = debts[_reserve][_user].mul(_amount).div(debt);
+    borrower(collateral).repayAave(_reserve, _amount);
+    _burnDebt(_reserve, _user, shares);
+    require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function settle(address _reserve) external {
+  function repayDebt(address _reserve, uint256 _amount) public {
+      repayDebtFor(_reserve, msg.sender, _amount);
+  }
+
+  function exit(address _reserve) external {
+      closePosition(_reserve, positions[_reserve][msg.sender]);
+      settle(_reserve);
+      withdrawCollateral(_reserve, principals[_reserve][msg.sender]);
+      require(isSafe(msg.sender) == true, "itrade: account would liquidate");
+  }
+
+  function settle(address _reserve) public {
       require(isReserve(_reserve) == true, "itrade: invalid reserve");
 
+      // TODO: Add in clean principal if any for reserve
       uint256 _debt = getUserDebt(_reserve, msg.sender);
-      IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _debt);
-      borrower(collateral).repayAave(_reserve, _debt);
-      _burnDebt(_reserve, msg.sender, debts[_reserve][msg.sender]);
+      if (_debt > 0) {
+        IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _debt);
+        borrower(collateral).repayAave(_reserve, _debt);
+        _burnDebt(_reserve, msg.sender, debts[_reserve][msg.sender]);
+      }
+      require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function tradePosition(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount) external {
@@ -369,7 +385,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function closePosition(address _reserve, uint256 _amount) external {
+  function closePosition(address _reserve, uint256 _amount) public {
       require(isReserve(_reserve) == true, "itrade: invalid reserve");
       require(_amount <= positions[_reserve][msg.sender], "itrade: insufficient balance");
       require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
