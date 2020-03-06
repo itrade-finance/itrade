@@ -221,12 +221,15 @@ contract iTrade is ReentrancyGuard, Ownable {
   uint256 public constant base = uint256(100);
 
   // principal deposits
+  mapping (address => uint256) totalPrincipals;
   mapping (address => mapping (address => uint256)) public principals;
 
   // debt shares
+  mapping (address => uint256) public totalDebts;
   mapping (address => mapping (address => uint256)) public debts;
   mapping (address => uint256) public debtsTotalSupply;
 
+  mapping (address => uint256) public totalPositions;
   mapping (address => mapping (address => uint256)) public positions;
 
   constructor() public {
@@ -263,6 +266,7 @@ contract iTrade is ReentrancyGuard, Ownable {
 
       IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount);
       principals[_reserve][msg.sender] = principals[_reserve][msg.sender].add(_amount);
+      totalPrincipals[msg.sender] = totalPrincipals[msg.sender].add(_amount);
       yERC20(getYToken(_reserve)).deposit(_amount);
 
       uint256 _borrow = (_amount.mul(leverage));
@@ -282,6 +286,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _borrow, _min_to_amount);
       uint256 _bought = IERC20(_to).balanceOf(address(this));
       positions[_to][msg.sender] = positions[_to][msg.sender].add(_bought);
+      totalPositions[msg.sender] = totalPositions[msg.sender].add(_bought);
 
       yERC20(getYToken(_to)).deposit(_bought);
   }
@@ -298,7 +303,8 @@ contract iTrade is ReentrancyGuard, Ownable {
       yERC20(getYToken(_reserve)).withdraw(_ytoken);
 
       require(IERC20(_reserve).balanceOf(address(this)) >= _amount, "itrade: unexpected result");
-      principals[_reserve][msg.sender] = principals[_reserve][msg.sender].sub(_amount);
+      principals[_reserve][msg.sender] = principals[_reserve][msg.sender].sub(_amount, "itrade: principal amount exceeds balance");
+      totalPrincipals[msg.sender] = totalPrincipals[msg.sender].sub(_amount, "itrade: principal amount exceeds balance");
 
       IERC20(_reserve).safeTransfer(msg.sender, _amount);
 
@@ -348,9 +354,11 @@ contract iTrade is ReentrancyGuard, Ownable {
       uint8 _toID = getCurveID(_to);
 
       ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _amount, _min_to_amount);
-      positions[_reserve][msg.sender] = positions[_reserve][msg.sender].sub(_amount);
+      positions[_reserve][msg.sender] = positions[_reserve][msg.sender].sub(_amount, "itrade: position amount exceeds balance");
+      totalPositions[msg.sender] = totalPositions[msg.sender].sub(_amount, "itrade: position amount exceeds balance");
       uint256 _bought = IERC20(_to).balanceOf(address(this));
       positions[_to][msg.sender] = positions[_to][msg.sender].add(_bought);
+      totalPositions[msg.sender] = totalPositions[msg.sender].add(_bought);
       yERC20(getYToken(_to)).deposit(_bought);
 
       // Cleanup dust (if any)
@@ -387,11 +395,20 @@ contract iTrade is ReentrancyGuard, Ownable {
         IERC20(_reserve).safeTransfer(msg.sender, ret);
       }
 
+      positions[_reserve][msg.sender] = positions[_reserve][msg.sender].sub(_amount, "itrade: principal amount exceeds balance");
+      totalPositions[msg.sender] = totalPositions[msg.sender].sub(_amount, "itrade: principal amount exceeds balance");
+
       // Cleanup dust (if any)
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
         yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
   }
+/*
+  function isSafe(address _reserve, address _user) public view returns (bool) {
+      uint256 debt = getUserDebt(_reserve, _user);
+      uint256 interest = getUSerInterest(_reserve, _user);
+      uint256 collateral = principals
+  }*/
 
   function getUserDebt(address _reserve, address _user) public view returns (uint256) {
       if (debtsTotalSupply[_reserve] == 0) {
@@ -400,21 +417,22 @@ contract iTrade is ReentrancyGuard, Ownable {
         return borrower(collateral).getBorrowDebt(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
       }
   }
-
   function getUserInterest(address _reserve, address _user) public view returns (uint256) {
-    if (debtsTotalSupply[_reserve] == 0) {
-      return 0;
-    } else {
-      return borrower(collateral).getBorrowInterest(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
-    }
+      if (debtsTotalSupply[_reserve] == 0) {
+        return 0;
+      } else {
+        return borrower(collateral).getBorrowInterest(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
+      }
   }
   function _mintDebt(address _reserve, address account, uint256 amount) internal {
       require(account != address(0), "DEBT: mint to the zero address");
       debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].add(amount);
       debts[_reserve][account] = debts[_reserve][account].add(amount);
+      totalDebts[account] = totalDebts[account].add(amount);
   }
   function _burnDebt(address _reserve, address account, uint256 amount) internal {
       require(account != address(0), "DEBT: burn from the zero address");
+      totalDebts[account] = totalDebts[account].sub(amount, "DEBT: burn amount exceeds balance");
       debts[_reserve][account] = debts[_reserve][account].sub(amount, "DEBT: burn amount exceeds balance");
       debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].sub(amount);
   }
