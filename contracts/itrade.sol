@@ -288,6 +288,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       totalPositions[msg.sender] = totalPositions[msg.sender].add(_bought);
 
       yERC20(getYToken(_to)).deposit(_bought);
+      require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function withdrawCollateral(address _reserve, uint256 _amount) external {
@@ -311,6 +312,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
         yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
+      require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function repayDebt(address _reserve, uint256 _amount) external {
@@ -364,6 +366,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
         yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
+      require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function closePosition(address _reserve, uint256 _amount) external {
@@ -401,6 +404,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
         yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
+      require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function isSafe(address _user) public view returns (bool) {
