@@ -338,7 +338,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
 
       uint256 _price = yERC20(getYToken(_reserve)).getPricePerFullShare();
-      uint256 _ytoken = _amount.mul(1e18).div(_price);
+      uint256 _ytoken = _amount.mul(1e18).div(_price).add(1);
       yERC20(getYToken(_reserve)).withdraw(_ytoken);
 
       require(IERC20(_reserve).balanceOf(address(this)) >= _amount, "itrade: unexpected result");
@@ -373,12 +373,14 @@ contract iTrade is ReentrancyGuard, Ownable {
       }
 
       uint256 _price = yERC20(getYToken(_reserve)).getPricePerFullShare();
-      uint256 _ytoken = _amount.mul(1e18).div(_price);
+      uint256 _ytoken = _amount.mul(1e18).div(_price).add(1);
       yERC20(getYToken(_reserve)).withdraw(_ytoken);
 
-      uint256 shares = debts[_reserve][msg.sender].mul(_amount).div(debt);
-      borrower(collateral).repayAave(_reserve, _amount);
-      _burnDebt(_reserve, msg.sender, shares);
+      if (debt > 0) {
+        uint256 shares = debts[_reserve][msg.sender].mul(_amount).div(debt);
+        borrower(collateral).repayAave(_reserve, _amount);
+        _burnDebt(_reserve, msg.sender, shares);
+      }
 
       // Profits from trade
       if (ret > 0) {
