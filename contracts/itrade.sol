@@ -408,15 +408,15 @@ contract iTrade is ReentrancyGuard, Ownable {
   }
 
   function isSafe(address _user) public view returns (bool) {
-      uint256 debt = getAllDebt(_user);
-      uint256 positions = totalPositions[_user];
-      uint256 collateral = totalPrincipals[_user];
-      if (positions > debt) {
+      uint256 _debt = getAllDebt(_user);
+      uint256 _position = totalPositions[_user];
+      uint256 _collateral = totalPrincipals[_user];
+      if (_position > _debt) {
         return true;
       } else {
-        uint256 diff = debt.sub(positions);
-        uint256 adjDebt = diff.mul(ltv).div(base);
-        if (collateral > adjDebt) {
+        uint256 _diff = _debt.sub(_position);
+        uint256 _adjDebt = _diff.mul(ltv).div(base);
+        if (_collateral > _adjDebt) {
           return true;
         } else {
           return false;
