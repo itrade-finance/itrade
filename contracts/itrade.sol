@@ -411,18 +411,17 @@ contract iTrade is ReentrancyGuard, Ownable {
       uint256 _debt = getAllDebt(_user);
       uint256 _position = totalPositions[_user];
       uint256 _collateral = totalPrincipals[_user];
-      if (_position > _debt) {
+      if (_position >= _debt) {
         return true;
       } else {
         uint256 _diff = _debt.sub(_position);
         uint256 _adjDebt = _diff.mul(ltv).div(base);
-        if (_collateral > _adjDebt) {
+        if (_collateral >= _adjDebt) {
           return true;
         } else {
           return false;
         }
       }
-
   }
 
   function seize(address _user) public {
