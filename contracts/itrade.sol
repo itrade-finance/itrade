@@ -394,11 +394,19 @@ contract iTrade is ReentrancyGuard, Ownable {
   }
 
   function getUserDebt(address _reserve, address _user) public view returns (uint256) {
-      return borrower(collateral).getBorrowDebt(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
+      if (debtsTotalSupply[_reserve] == 0) {
+        return 0;
+      } else {
+        return borrower(collateral).getBorrowDebt(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
+      }
   }
 
   function getUserInterest(address _reserve, address _user) public view returns (uint256) {
+    if (debtsTotalSupply[_reserve] == 0) {
+      return 0;
+    } else {
       return borrower(collateral).getBorrowInterest(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
+    }
   }
   function _mintDebt(address _reserve, address account, uint256 amount) internal {
       require(account != address(0), "DEBT: mint to the zero address");
