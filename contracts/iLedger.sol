@@ -209,9 +209,15 @@ contract iLedger is ReentrancyGuard, Ownable {
 
   borrower public constant collateral = borrower(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
 
+  address public constant DAI = address(0x6B175474E89094C44Da98b954EedeAC495271d0F);
+  address public constant USDC = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+  address public constant USDT = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
+  address public constant TUSD = address(0x0000000000085d4780B73119b644AE5ecd22b376);
+
   uint256 public constant ltv = uint256(120);
   uint256 public constant base = uint256(100);
   address public trader;
+  address public liquidator;
 
   // principal deposits
   mapping (address => uint256) totalPrincipals;
@@ -224,16 +230,23 @@ contract iLedger is ReentrancyGuard, Ownable {
   mapping (address => uint256) public totalPositions;
   mapping (address => mapping (address => uint256)) public positions;
 
-  modifier onlyTrader() {
-      require(trader == msg.sender, "itrade: caller is not the trader");
+  modifier onlyAuthority() {
+      require(trader == msg.sender||liquidator == msg.sender, "itrade: caller is not the authority");
       _;
   }
   function transferTrader(address newTrader) public onlyOwner {
       _transferTrader(newTrader);
   }
+  function transferLiquidator(address newLiquidator) public onlyOwner {
+      _transferLiquidator(newLiquidator);
+  }
   function _transferTrader(address newTrader) internal {
       require(newTrader != address(0), "itrade: new trader is the zero address");
       trader = newTrader;
+  }
+  function _transferLiquidator(address newLiquidator) internal {
+      require(newLiquidator != address(0), "itrade: new liquidator is the zero address");
+      liquidator = newLiquidator;
   }
 
   constructor() public {
@@ -253,11 +266,32 @@ contract iLedger is ReentrancyGuard, Ownable {
   function getTotalDebt(address _reserve) external view returns (uint256) {
     return debtsTotalSupply[_reserve];
   }
-  function getTotalPosition(address _user) external view returns (uint256) {
+  function getTotalPosition(address _user) public view returns (uint256) {
     return totalPositions[_user];
   }
-  function getTotalPrincipal(address _user) external view returns (uint256) {
+  function getTotalPrincipal(address _user) public view returns (uint256) {
     return totalPrincipals[_user];
+  }
+
+  function isSafe(address _user) public view returns (bool) {
+      uint256 _debt = getAllDebt(_user);
+      uint256 _position = getTotalPosition(_user);
+      uint256 _collateral = getTotalPrincipal(_user);
+      if (_position >= _debt) {
+        return true;
+      } else {
+        uint256 _diff = _debt.sub(_position);
+        uint256 _adjDebt = _diff.mul(ltv).div(base);
+        if (_collateral >= _adjDebt) {
+          return true;
+        } else {
+          return false;
+        }
+      }
+  }
+
+  function getAllDebt(address _user) public view returns (uint256) {
+      return getUserDebt(DAI, _user).add(getUserDebt(USDC, _user)).add(getUserDebt(USDT, _user));
   }
 
   function getUserDebt(address _reserve, address _user) public view returns (uint256) {
@@ -274,32 +308,32 @@ contract iLedger is ReentrancyGuard, Ownable {
         return collateral.getBorrowInterest(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
       }
   }
-  function mintDebt(address _reserve, address account, uint256 amount) external onlyTrader {
+  function mintDebt(address _reserve, address account, uint256 amount) external onlyAuthority {
       require(account != address(0), "Debt: mint to the zero address");
       debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].add(amount);
       debts[_reserve][account] = debts[_reserve][account].add(amount);
   }
-  function burnDebt(address _reserve, address account, uint256 amount) external onlyTrader {
+  function burnDebt(address _reserve, address account, uint256 amount) external onlyAuthority {
       require(account != address(0), "Debt: burn from the zero address");
       debts[_reserve][account] = debts[_reserve][account].sub(amount, "Debt: burn amount exceeds balance");
       debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].sub(amount);
   }
-  function mintPrincipal(address _reserve, address account, uint256 amount) external onlyTrader {
+  function mintPrincipal(address _reserve, address account, uint256 amount) external onlyAuthority {
       require(account != address(0), "Principal: mint to the zero address");
       totalPrincipals[_reserve] = totalPrincipals[_reserve].add(amount);
       principals[_reserve][account] = principals[_reserve][account].add(amount);
   }
-  function burnPrincipal(address _reserve, address account, uint256 amount) external onlyTrader {
+  function burnPrincipal(address _reserve, address account, uint256 amount) external onlyAuthority {
       require(account != address(0), "Principal: burn from the zero address");
       principals[_reserve][account] = principals[_reserve][account].sub(amount, "Principal: burn amount exceeds balance");
       totalPrincipals[_reserve] = totalPrincipals[_reserve].sub(amount);
   }
-  function mintPosition(address _reserve, address account, uint256 amount) external onlyTrader {
+  function mintPosition(address _reserve, address account, uint256 amount) external onlyAuthority {
       require(account != address(0), "Position: mint to the zero address");
       totalPositions[_reserve] = totalPositions[_reserve].add(amount);
       positions[_reserve][account] = positions[_reserve][account].add(amount);
   }
-  function burnPosition(address _reserve, address account, uint256 amount) external onlyTrader {
+  function burnPosition(address _reserve, address account, uint256 amount) external onlyAuthority {
       require(account != address(0), "Position: burn from the zero address");
       positions[_reserve][account] = positions[_reserve][account].sub(amount, "Position: burn amount exceeds balance");
       totalPositions[_reserve] = totalPositions[_reserve].sub(amount);

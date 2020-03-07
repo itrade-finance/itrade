@@ -220,7 +220,7 @@ interface iLedger {
   function isSafe(address _user) external view returns (bool);
 }
 
-contract iTrade is ReentrancyGuard, Ownable {
+contract iManage is ReentrancyGuard, Ownable {
   using SafeERC20 for IERC20;
   using Address for address;
   using SafeMath for uint256;
@@ -244,133 +244,7 @@ contract iTrade is ReentrancyGuard, Ownable {
   uint256 public constant base = uint256(100);
 
   constructor() public {
-    approveToken();
-  }
 
-  function approveToken() public {
-      IERC20(DAI).safeApprove(address(collateral), uint(-1));
-      IERC20(USDC).safeApprove(address(collateral), uint(-1));
-      IERC20(TUSD).safeApprove(address(collateral), uint(-1));
-
-      IERC20(USDT).safeApprove(address(collateral), uint(0));
-      IERC20(USDT).safeApprove(address(collateral), uint(-1));
-
-      IERC20(DAI).safeApprove(yDAI, uint(-1));
-      IERC20(USDC).safeApprove(yUSDC, uint(-1));
-      IERC20(TUSD).safeApprove(yTUSD, uint(-1));
-
-      IERC20(USDT).safeApprove(yUSDT, uint(0));
-      IERC20(USDT).safeApprove(yUSDT, uint(-1));
-
-      // Approvals for swaps
-      IERC20(DAI).safeApprove(yCurveSwap, uint(-1));
-      IERC20(USDC).safeApprove(yCurveSwap, uint(-1));
-      IERC20(TUSD).safeApprove(yCurveSwap, uint(-1));
-
-      IERC20(USDT).safeApprove(yCurveSwap, uint(0));
-      IERC20(USDT).safeApprove(yCurveSwap, uint(-1));
-  }
-
-  function addCollateral(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage) external nonReentrant {
-    addCollateralWithFee(_reserve, _to, _amount, _min_to_amount, leverage, 0);
-  }
-
-  function addCollateralWithFee(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage, uint256 fee) public nonReentrant {
-    require(collateral.isLeverage(leverage) == true, "itrade: invalid leverage parameter");
-    require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
-
-    IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount.add(fee));
-    ledger.mintPrincipal(_reserve, msg.sender, _amount);
-    yERC20(collateral.getYToken(_reserve)).deposit(_amount.add(fee));
-
-    uint256 _borrow = _amount.mul(leverage);
-    uint256 _pool = collateral.getBorrowDebt(_reserve);
-    uint256 _debt = 0;
-    if (_pool == 0) {
-      _debt = _borrow;
-    } else {
-      _debt = (_borrow.mul(ledger.getTotalDebt(_reserve))).div(_pool);
-    }
-    ledger.mintDebt(_reserve, msg.sender, _debt);
-    collateral.borrowAave(_reserve, _borrow);
-
-    uint8 _fromID = collateral.getCurveID(_reserve);
-    uint8 _toID = collateral.getCurveID(_to);
-    require(IERC20(_to).balanceOf(address(this)) == 0, "itrade: unexpected result");
-    ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _borrow, _min_to_amount);
-    uint256 _bought = IERC20(_to).balanceOf(address(this));
-    ledger.mintPosition(_to, msg.sender, _bought);
-
-    yERC20(collateral.getYToken(_to)).deposit(_bought);
-
-    require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
-  }
-
-  function withdrawCollateral(address _reserve, uint256 _amount) public nonReentrant {
-      require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
-      require(ledger.getUserDebt(_reserve, msg.sender) == 0, "itrade: outstanding debt to settle");
-
-      require(_amount <= ledger.getPrincipal(_reserve, msg.sender), "itrade: insufficient balance");
-      require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
-
-      uint256 _price = yERC20(collateral.getYToken(_reserve)).getPricePerFullShare();
-      uint256 _ytoken = _amount.mul(1e18).div(_price);
-      yERC20(collateral.getYToken(_reserve)).withdraw(_ytoken);
-
-      require(IERC20(_reserve).balanceOf(address(this)) >= _amount, "itrade: unexpected result");
-      ledger.burnPrincipal(_reserve, msg.sender, _amount);
-
-      IERC20(_reserve).safeTransfer(msg.sender, _amount);
-
-      // Cleanup dust (if any)
-      if (IERC20(_reserve).balanceOf(address(this)) > 0) {
-        yERC20(collateral.getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
-      }
-
-      require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
-  }
-
-  function repayDebtFor(address _reserve, address _user, uint256 _amount) public nonReentrant {
-    require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
-
-    uint256 debt = ledger.getUserDebt(_reserve, _user);
-
-    if (_amount > debt) {
-      _amount = debt;
-    }
-
-    IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount);
-    uint256 shares = ledger.getDebt(_reserve, _user).mul(_amount).div(debt);
-    collateral.repayAave(_reserve, _amount);
-    ledger.burnDebt(_reserve, _user, shares);
-
-    require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
-  }
-
-  function repayDebt(address _reserve, uint256 _amount) public nonReentrant {
-      repayDebtFor(_reserve, msg.sender, _amount);
-  }
-
-  function exit(address _reserve) external nonReentrant {
-      closePosition(_reserve, ledger.getPosition(_reserve,msg.sender));
-      settle(_reserve);
-      withdrawCollateral(_reserve, ledger.getPrincipal(_reserve,msg.sender));
-
-      require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
-  }
-
-  function settle(address _reserve) public nonReentrant {
-      require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
-
-      // TODO: Add in clean principal if any for reserve
-      uint256 _debt = ledger.getUserDebt(_reserve, msg.sender);
-      if (_debt > 0) {
-        IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _debt);
-        collateral.repayAave(_reserve, _debt);
-        ledger.burnDebt(_reserve, msg.sender, ledger.getDebt(_reserve,msg.sender));
-      }
-
-      require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function tradePosition(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount) external nonReentrant {
