@@ -268,8 +268,7 @@ contract iTrade is ReentrancyGuard, Ownable {
     require(isReserve(_reserve) == true, "itrade: invalid reserve");
 
     IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount.add(fee));
-    principals[_reserve][msg.sender] = principals[_reserve][msg.sender].add(_amount.add(fee));
-    totalPrincipals[msg.sender] = totalPrincipals[msg.sender].add(_amount.add(fee));
+    _mintPrincipal(_reserve, msg.sender, _amount);
     yERC20(getYToken(_reserve)).deposit(_amount.add(fee));
 
     uint256 _borrow = _amount.mul(leverage);
@@ -288,8 +287,7 @@ contract iTrade is ReentrancyGuard, Ownable {
     require(IERC20(_to).balanceOf(address(this)) == 0, "itrade: unexpected result");
     ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _borrow, _min_to_amount);
     uint256 _bought = IERC20(_to).balanceOf(address(this));
-    positions[_to][msg.sender] = positions[_to][msg.sender].add(_bought);
-    totalPositions[msg.sender] = totalPositions[msg.sender].add(_bought);
+    _mintPosition(_to, msg.sender, _bought);
 
     yERC20(getYToken(_to)).deposit(_bought);
 
@@ -308,8 +306,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       yERC20(getYToken(_reserve)).withdraw(_ytoken);
 
       require(IERC20(_reserve).balanceOf(address(this)) >= _amount, "itrade: unexpected result");
-      principals[_reserve][msg.sender] = principals[_reserve][msg.sender].sub(_amount, "itrade: principal amount exceeds balance");
-      totalPrincipals[msg.sender] = totalPrincipals[msg.sender].sub(_amount, "itrade: principal amount exceeds balance");
+      _burnPrincipal(_reserve, msg.sender, _amount);
 
       IERC20(_reserve).safeTransfer(msg.sender, _amount);
 
@@ -380,11 +377,9 @@ contract iTrade is ReentrancyGuard, Ownable {
       uint8 _toID = getCurveID(_to);
 
       ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _amount, _min_to_amount);
-      positions[_reserve][msg.sender] = positions[_reserve][msg.sender].sub(_amount, "itrade: position amount exceeds balance");
-      totalPositions[msg.sender] = totalPositions[msg.sender].sub(_amount, "itrade: position amount exceeds balance");
+      _burnPosition(_reserve, msg.sender, _amount);
       uint256 _bought = IERC20(_to).balanceOf(address(this));
-      positions[_to][msg.sender] = positions[_to][msg.sender].add(_bought);
-      totalPositions[msg.sender] = totalPositions[msg.sender].add(_bought);
+      _mintPosition(_to, msg.sender, _bought);
       yERC20(getYToken(_to)).deposit(_bought);
 
       // Cleanup dust (if any)
@@ -423,8 +418,7 @@ contract iTrade is ReentrancyGuard, Ownable {
         IERC20(_reserve).safeTransfer(msg.sender, ret);
       }
 
-      positions[_reserve][msg.sender] = positions[_reserve][msg.sender].sub(_amount, "itrade: principal amount exceeds balance");
-      totalPositions[msg.sender] = totalPositions[msg.sender].sub(_amount, "itrade: principal amount exceeds balance");
+      _burnPosition(_reserve, msg.sender, _amount);
 
       // Cleanup dust (if any)
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
@@ -468,23 +462,13 @@ contract iTrade is ReentrancyGuard, Ownable {
         uint256 _debt = debts[_reserve][_user];
         uint256 _position = positions[_reserve][_user];
 
-        principals[_reserve][_user] = principals[_reserve][_user].sub(_principal);
-        totalPrincipals[_user] = totalPrincipals[_user].sub(_principal);
+        _mintPrincipal(_reserve, _user, _principal);
+        _burnDebt(_reserve, _user, _debt);
+        _burnPosition(_reserve, _user, _position);
 
-        debts[_reserve][_user] = debts[_reserve][_user].sub(_debt);
-        debtsTotalSupply[_user] = debtsTotalSupply[_user].sub(_debt);
-
-        positions[_reserve][_user] = positions[_reserve][_user].sub(_position);
-        totalPositions[_user] = totalPositions[_user].sub(_position);
-
-        principals[_reserve][msg.sender] = principals[_reserve][msg.sender].add(_principal);
-        totalPrincipals[msg.sender] = totalPrincipals[msg.sender].add(_principal);
-
-        debts[_reserve][msg.sender] = debts[_reserve][msg.sender].add(_debt);
-        debtsTotalSupply[msg.sender] = debtsTotalSupply[msg.sender].add(_debt);
-
-        positions[_reserve][msg.sender] = positions[_reserve][msg.sender].add(_position);
-        totalPositions[msg.sender] = totalPositions[msg.sender].add(_position);
+        _mintPrincipal(_reserve, msg.sender, _principal);
+        _mintDebt(_reserve, msg.sender, _debt);
+        _mintPosition(_reserve, msg.sender, _position);
       }
   }
 
@@ -507,14 +491,34 @@ contract iTrade is ReentrancyGuard, Ownable {
       }
   }
   function _mintDebt(address _reserve, address account, uint256 amount) internal {
-      require(account != address(0), "DEBT: mint to the zero address");
+      require(account != address(0), "Debt: mint to the zero address");
       debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].add(amount);
       debts[_reserve][account] = debts[_reserve][account].add(amount);
   }
   function _burnDebt(address _reserve, address account, uint256 amount) internal {
-      require(account != address(0), "DEBT: burn from the zero address");
-      debts[_reserve][account] = debts[_reserve][account].sub(amount, "DEBT: burn amount exceeds balance");
+      require(account != address(0), "Debt: burn from the zero address");
+      debts[_reserve][account] = debts[_reserve][account].sub(amount, "Debt: burn amount exceeds balance");
       debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].sub(amount);
+  }
+  function _mintPrincipal(address _reserve, address account, uint256 amount) internal {
+      require(account != address(0), "Principal: mint to the zero address");
+      totalPrincipals[_reserve] = totalPrincipals[_reserve].add(amount);
+      principals[_reserve][account] = principals[_reserve][account].add(amount);
+  }
+  function _burnPrincipal(address _reserve, address account, uint256 amount) internal {
+      require(account != address(0), "Principal: burn from the zero address");
+      principals[_reserve][account] = principals[_reserve][account].sub(amount, "Principal: burn amount exceeds balance");
+      totalPrincipals[_reserve] = totalPrincipals[_reserve].sub(amount);
+  }
+  function _mintPosition(address _reserve, address account, uint256 amount) internal {
+      require(account != address(0), "Position: mint to the zero address");
+      totalPositions[_reserve] = totalPositions[_reserve].add(amount);
+      positions[_reserve][account] = positions[_reserve][account].add(amount);
+  }
+  function _burnPosition(address _reserve, address account, uint256 amount) internal {
+      require(account != address(0), "Position: burn from the zero address");
+      positions[_reserve][account] = positions[_reserve][account].sub(amount, "Position: burn amount exceeds balance");
+      totalPositions[_reserve] = totalPositions[_reserve].sub(amount);
   }
   function getYToken(address _reserve) public pure returns (address) {
       if (_reserve == DAI) {
