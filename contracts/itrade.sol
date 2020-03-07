@@ -260,36 +260,40 @@ contract iTrade is ReentrancyGuard, Ownable {
   }
 
   function addCollateral(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage) external {
-      require(isLeverage(leverage) == true, "itrade: invalid leverage parameter");
-      require(isReserve(_reserve) == true, "itrade: invalid reserve");
+    addCollateralWithFee(_reserve, _to, _amount, _min_to_amount, leverage, 0);
+  }
 
-      IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount);
-      principals[_reserve][msg.sender] = principals[_reserve][msg.sender].add(_amount);
-      totalPrincipals[msg.sender] = totalPrincipals[msg.sender].add(_amount);
-      yERC20(getYToken(_reserve)).deposit(_amount);
+  function addCollateralWithFee(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage, uint256 fee) public {
+    require(isLeverage(leverage) == true, "itrade: invalid leverage parameter");
+    require(isReserve(_reserve) == true, "itrade: invalid reserve");
 
-      uint256 _borrow = (_amount.mul(leverage));
-      uint256 _pool = borrower(collateral).getBorrowDebt(_reserve);
-      uint256 _debt = 0;
-      if (_pool == 0) {
-        _debt = _borrow;
-      } else {
-        _debt = (_borrow.mul(debtsTotalSupply[_reserve])).div(_pool);
-      }
-      _mintDebt(_reserve, msg.sender, _debt);
-      borrower(collateral).borrowAave(_reserve, _borrow);
+    IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount.add(fee));
+    principals[_reserve][msg.sender] = principals[_reserve][msg.sender].add(_amount.add(fee));
+    totalPrincipals[msg.sender] = totalPrincipals[msg.sender].add(_amount.add(fee));
+    yERC20(getYToken(_reserve)).deposit(_amount.add(fee));
 
-      uint8 _fromID = getCurveID(_reserve);
-      uint8 _toID = getCurveID(_to);
-      require(IERC20(_to).balanceOf(address(this)) == 0, "itrade: unexpected result");
-      ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _borrow, _min_to_amount);
-      uint256 _bought = IERC20(_to).balanceOf(address(this));
-      positions[_to][msg.sender] = positions[_to][msg.sender].add(_bought);
-      totalPositions[msg.sender] = totalPositions[msg.sender].add(_bought);
+    uint256 _borrow = _amount.mul(leverage);
+    uint256 _pool = borrower(collateral).getBorrowDebt(_reserve);
+    uint256 _debt = 0;
+    if (_pool == 0) {
+      _debt = _borrow;
+    } else {
+      _debt = (_borrow.mul(debtsTotalSupply[_reserve])).div(_pool);
+    }
+    _mintDebt(_reserve, msg.sender, _debt);
+    borrower(collateral).borrowAave(_reserve, _borrow);
 
-      yERC20(getYToken(_to)).deposit(_bought);
+    uint8 _fromID = getCurveID(_reserve);
+    uint8 _toID = getCurveID(_to);
+    require(IERC20(_to).balanceOf(address(this)) == 0, "itrade: unexpected result");
+    ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _borrow, _min_to_amount);
+    uint256 _bought = IERC20(_to).balanceOf(address(this));
+    positions[_to][msg.sender] = positions[_to][msg.sender].add(_bought);
+    totalPositions[msg.sender] = totalPositions[msg.sender].add(_bought);
 
-      require(isSafe(msg.sender) == true, "itrade: account would liquidate");
+    yERC20(getYToken(_to)).deposit(_bought);
+
+    require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function withdrawCollateral(address _reserve, uint256 _amount) public {
