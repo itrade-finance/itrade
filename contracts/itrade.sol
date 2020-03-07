@@ -237,14 +237,20 @@ contract iTrade is ReentrancyGuard, Ownable {
   address public constant USDT = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
   address public constant TUSD = address(0x0000000000085d4780B73119b644AE5ecd22b376);
 
-  iBorrower public constant collateral = iBorrower(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
-  iLedger public constant ledger = iLedger(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
-
-  uint256 public constant ltv = uint256(50);
-  uint256 public constant base = uint256(100);
+  iBorrower public collateral;
+  iLedger public ledger;
 
   constructor() public {
+    collateral = iBorrower(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
+    ledger = iLedger(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
     approveToken();
+  }
+
+  function setCollateral(iBorrower _collateral) external onlyOwner {
+    collateral = iBorrower(_collateral);
+  }
+  function setLedger(iLeder _ledger) external onlyOwner {
+    ledger = iLedger(_ledger);
   }
 
   function approveToken() public {
@@ -440,10 +446,41 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
+  function seize(address _user) external nonReentrant {
+      require(ledger.isSafe(_user) == false, "itrade: account is safe");
+
+      _seizeReserve(DAI, _user);
+      _seizeReserve(USDC, _user);
+      _seizeReserve(USDT, _user);
+
+      require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
+      require(ledger.isSafe(_user) == true, "itrade: account would liquidate");
+  }
+
+  function _seizeReserve(address _reserve, address _user) internal {
+      uint256 _principal = ledger.getPrincipal(_reserve,_user);
+      if (_principal > 0) {
+        uint256 _debt = ledger.getDebt(_reserve,_user);
+        uint256 _position = ledger.getPosition(_reserve,_user);
+
+        ledger.mintPrincipal(_reserve, _user, _principal);
+        ledger.burnDebt(_reserve, _user, _debt);
+        ledger.burnPosition(_reserve, _user, _position);
+
+        ledger.mintPrincipal(_reserve, msg.sender, _principal);
+        ledger.mintDebt(_reserve, msg.sender, _debt);
+        ledger.mintPosition(_reserve, msg.sender, _position);
+      }
+  }
+
   // incase of half-way error
   function inCaseTokenGetsStuck(IERC20 _TokenAddress) onlyOwner public {
       uint qty = _TokenAddress.balanceOf(address(this));
       _TokenAddress.safeTransfer(msg.sender, qty);
+  }
+  // incase of half-way error
+  function inCaseTokenGetsStuckPartial(IERC20 _TokenAddress, uint256 _amount) onlyOwner public {
+      _TokenAddress.safeTransfer(msg.sender, _amount);
   }
   // incase of half-way error
   function inCaseETHGetsStuck() onlyOwner public{

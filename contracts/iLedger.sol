@@ -179,23 +179,9 @@ library SafeERC20 {
     }
 }
 
-interface ICurveFi {
-  function exchange_underlying(
-    int128 from, int128 to, uint256 _from_amount, uint256 _min_to_amount
-  ) external;
-}
-
-interface yERC20 {
-  function deposit(uint256 _amount) external;
-  function withdraw(uint256 _amount) external;
-  function getPricePerFullShare() external view returns (uint256);
-}
-
 interface borrower {
-  function borrowAave(address _reserve, uint256 _amount) external;
   function getBorrowDebt(address _reserve) external view returns (uint256);
   function getBorrowInterest(address _reserve) external view returns (uint256);
-  function repayAave(address _reserve, uint256 _amount) external;
   function getYToken(address _reserve) external view returns (address);
   function getCurveID(address _reserve) external view returns (uint8);
   function isLeverage(uint256 leverage) external view returns (bool);
@@ -207,50 +193,52 @@ contract iLedger is ReentrancyGuard, Ownable {
   using Address for address;
   using SafeMath for uint256;
 
-  borrower public constant collateral = borrower(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
-
   address public constant DAI = address(0x6B175474E89094C44Da98b954EedeAC495271d0F);
   address public constant USDC = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
   address public constant USDT = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
   address public constant TUSD = address(0x0000000000085d4780B73119b644AE5ecd22b376);
 
-  uint256 public constant ltv = uint256(120);
+
   uint256 public constant base = uint256(100);
-  address public trader;
-  address public liquidator;
 
   // principal deposits
-  mapping (address => uint256) totalPrincipals;
+  mapping (address => uint256) totalPrincipals; // _user => principal
   mapping (address => mapping (address => uint256)) public principals;
 
   // debt shares
   mapping (address => mapping (address => uint256)) public debts;
-  mapping (address => uint256) public debtsTotalSupply;
+  mapping (address => uint256) public debtsTotalSupply; // _reserve => total
 
-  mapping (address => uint256) public totalPositions;
+  mapping (address => uint256) public totalPositions; // _user => position
   mapping (address => mapping (address => uint256)) public positions;
 
+  address public trader;
+  borrower public collateral;
+  uint256 public ltv;
+
   modifier onlyAuthority() {
-      require(trader == msg.sender||liquidator == msg.sender, "itrade: caller is not the authority");
+      require(trader == msg.sender, "itrade: caller is not the authority");
       _;
   }
   function transferTrader(address newTrader) public onlyOwner {
       _transferTrader(newTrader);
   }
-  function transferLiquidator(address newLiquidator) public onlyOwner {
-      _transferLiquidator(newLiquidator);
-  }
   function _transferTrader(address newTrader) internal {
       require(newTrader != address(0), "itrade: new trader is the zero address");
       trader = newTrader;
   }
-  function _transferLiquidator(address newLiquidator) internal {
-      require(newLiquidator != address(0), "itrade: new liquidator is the zero address");
-      liquidator = newLiquidator;
-  }
 
   constructor() public {
+      collateral = borrower(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
+      ltv = uint256(110);
+  }
 
+  function setLTV(uint256 _ltv) external onlyOwner {
+    ltv = _ltv;
+  }
+
+  function setBorrower(borrower _borrower) external onlyOwner {
+    collateral = borrower(_borrower);
   }
 
   function getDebt(address _reserve, address _user) external view returns (uint256) {
@@ -291,7 +279,10 @@ contract iLedger is ReentrancyGuard, Ownable {
   }
 
   function getAllDebt(address _user) public view returns (uint256) {
-      return getUserDebt(DAI, _user).add(getUserDebt(USDC, _user)).add(getUserDebt(USDT, _user));
+      return getUserDebt(DAI, _user)
+        .add(getUserDebt(USDC, _user))
+        .add(getUserDebt(USDT, _user))
+        .add(getUserDebt(TUSD, _user));
   }
 
   function getUserDebt(address _reserve, address _user) public view returns (uint256) {

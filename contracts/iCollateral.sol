@@ -298,15 +298,13 @@ contract iCollateral is ERC20, ERC20Detailed, ReentrancyGuard, Ownable {
   using Address for address;
   using SafeMath for uint256;
 
-  address public collateral;
+  address public constant collateral = address(0x0000000000085d4780B73119b644AE5ecd22b376);
 
-  address public aave;
-  address public aavePool;
-  address public yAaveToken;
+  address public constant aave = address(0x24a42fD28C976A61Df5D00D0599C34c4f90748c8);
+  address public constant aavePool = address(0x3dfd23A6c5E8BbcFc9581d2E864a68feb6a076d3);
+  address public constant yAaveToken = address(0x4DA9b813057D04BAef4e5800E36083717b4a0341);
 
-  uint256 public maxBorrow;
-  uint256 public maxBorrowBase;
-  address public trader;
+  uint256 public constant maxBorrowBase = uint256(100);
 
   address public constant yDAI = address(0x16de59092dAE5CcF4A1E6439D611fd0653f0Bd01);
   address public constant yUSDC = address(0xd6aD7a6750A7593E092a9B218d66C0A814a3436e);
@@ -317,6 +315,9 @@ contract iCollateral is ERC20, ERC20Detailed, ReentrancyGuard, Ownable {
   address public constant USDC = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
   address public constant USDT = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
   address public constant TUSD = address(0x0000000000085d4780B73119b644AE5ecd22b376);
+
+  uint256 public maxBorrow;
+  address public trader;
 
   modifier onlyTrader() {
       require(trader == msg.sender, "itrade: caller is not the trader");
@@ -331,17 +332,12 @@ contract iCollateral is ERC20, ERC20Detailed, ReentrancyGuard, Ownable {
   }
 
   constructor() public ERC20Detailed("itrade y.curve.fi", "y.curve.fi", 18) {
-    //TUSD collateral
-    collateral = address(0x0000000000085d4780B73119b644AE5ecd22b376);
-
-    aave = address(0x24a42fD28C976A61Df5D00D0599C34c4f90748c8);
-    aavePool = address(0x3dfd23A6c5E8BbcFc9581d2E864a68feb6a076d3);
-    // collateral token aTUSD
-    yAaveToken = address(0x4DA9b813057D04BAef4e5800E36083717b4a0341);
     maxBorrow = uint256(50);
-    maxBorrowBase = uint256(100);
-
     approveToken();
+  }
+
+  function setMaxBorrow(uint256 _maxBorrow) external onlyOwner {
+    maxBorrow = _maxBorrow;
   }
 
   // LP deposit
@@ -408,7 +404,7 @@ contract iCollateral is ERC20, ERC20Detailed, ReentrancyGuard, Ownable {
       // Repayments to Aave
       IERC20(DAI).safeApprove(getAaveCore(), uint(-1));
       IERC20(USDC).safeApprove(getAaveCore(), uint(-1));
-      /*IERC20(TUSD).safeApprove(getAaveCore(), uint(-1));*/
+      IERC20(TUSD).safeApprove(getAaveCore(), uint(-1));
 
       IERC20(USDT).safeApprove(getAaveCore(), uint(0));
       IERC20(USDT).safeApprove(getAaveCore(), uint(-1));
@@ -430,13 +426,14 @@ contract iCollateral is ERC20, ERC20Detailed, ReentrancyGuard, Ownable {
       require(isReserve(_reserve) == true, "itrade: invalid reserve");
       //0x2 = VARIABLE InterestRateModel
       Aave(getAave()).borrow(_reserve, _amount, 2, 7);
+
       uint maxDebt = balanceAave().mul(maxBorrow).div(maxBorrowBase);
       require(calcSystemDebt() < maxDebt, "itrade: over max collateralization");
       IERC20(_reserve).safeTransfer(msg.sender, _amount);
   }
 
   function calcSystemDebt() public view returns (uint256) {
-    return getBorrowDebt(DAI).add(getBorrowDebt(USDC)).add(getBorrowDebt(USDT));
+    return getBorrowDebt(DAI).add(getBorrowDebt(USDC)).add(getBorrowDebt(USDT)).add(getBorrowDebt(TUSD));
   }
 
   function getBorrowDebt(address _reserve) public view returns (uint256) {
@@ -530,6 +527,10 @@ contract iCollateral is ERC20, ERC20Detailed, ReentrancyGuard, Ownable {
   function inCaseTokenGetsStuck(IERC20 _TokenAddress) onlyOwner public {
       uint qty = _TokenAddress.balanceOf(address(this));
       _TokenAddress.safeTransfer(msg.sender, qty);
+  }
+  // incase of half-way error
+  function inCaseTokenGetsStuckPartial(IERC20 _TokenAddress, uint256 _amount) onlyOwner public {
+      _TokenAddress.safeTransfer(msg.sender, _amount);
   }
   // incase of half-way error
   function inCaseETHGetsStuck() onlyOwner public{
