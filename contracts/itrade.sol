@@ -191,11 +191,32 @@ interface yERC20 {
   function getPricePerFullShare() external view returns (uint256);
 }
 
-interface borrower {
+interface iBorrower {
   function borrowAave(address _reserve, uint256 _amount) external;
   function getBorrowDebt(address _reserve) external view returns (uint256);
   function getBorrowInterest(address _reserve) external view returns (uint256);
   function repayAave(address _reserve, uint256 _amount) external;
+  function getYToken(address _reserve) external view returns (address);
+  function getCurveID(address _reserve) external view returns (uint8);
+  function isLeverage(uint256 leverage) external view returns (bool);
+  function isReserve(address _reserve) external view returns (bool);
+}
+
+interface iLedger {
+  function mintDebt(address _reserve, address account, uint256 amount) external;
+  function burnDebt(address _reserve, address account, uint256 amount) external;
+  function mintPrincipal(address _reserve, address account, uint256 amount) external;
+  function burnPrincipal(address _reserve, address account, uint256 amount) external;
+  function mintPosition(address _reserve, address account, uint256 amount) external;
+  function burnPosition(address _reserve, address account, uint256 amount) external;
+  function getUserInterest(address _reserve, address _user) external view returns (uint256);
+  function getUserDebt(address _reserve, address _user) external view returns (uint256);
+  function getDebt(address _reserve, address _user) external view returns (uint256);
+  function getPosition(address _reserve, address _user) external view returns (uint256);
+  function getPrincipal(address _reserve, address _user) external view returns (uint256);
+  function getTotalDebt(address _user) external view returns (uint256);
+  function getTotalPosition(address _user) external view returns (uint256);
+  function getTotalPrincipal(address _user) external view returns (uint256);
 }
 
 contract iTrade is ReentrancyGuard, Ownable {
@@ -215,33 +236,23 @@ contract iTrade is ReentrancyGuard, Ownable {
   address public constant USDT = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
   address public constant TUSD = address(0x0000000000085d4780B73119b644AE5ecd22b376);
 
-  address public constant collateral = address(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
+  iBorrower public constant collateral = iBorrower(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
+  iLedger public constant ledger = iLedger(0xaCD746993f60e807fBf69F646e42DaedA63a4CfC);
 
-  uint256 public constant ltv = uint256(120);
+  uint256 public constant ltv = uint256(50);
   uint256 public constant base = uint256(100);
-
-  // principal deposits
-  mapping (address => uint256) totalPrincipals;
-  mapping (address => mapping (address => uint256)) public principals;
-
-  // debt shares
-  mapping (address => mapping (address => uint256)) public debts;
-  mapping (address => uint256) public debtsTotalSupply;
-
-  mapping (address => uint256) public totalPositions;
-  mapping (address => mapping (address => uint256)) public positions;
 
   constructor() public {
     approveToken();
   }
 
   function approveToken() public {
-      IERC20(DAI).safeApprove(collateral, uint(-1));
-      IERC20(USDC).safeApprove(collateral, uint(-1));
-      IERC20(TUSD).safeApprove(collateral, uint(-1));
+      IERC20(DAI).safeApprove(address(collateral), uint(-1));
+      IERC20(USDC).safeApprove(address(collateral), uint(-1));
+      IERC20(TUSD).safeApprove(address(collateral), uint(-1));
 
-      IERC20(USDT).safeApprove(collateral, uint(0));
-      IERC20(USDT).safeApprove(collateral, uint(-1));
+      IERC20(USDT).safeApprove(address(collateral), uint(0));
+      IERC20(USDT).safeApprove(address(collateral), uint(-1));
 
       IERC20(DAI).safeApprove(yDAI, uint(-1));
       IERC20(USDC).safeApprove(yUSDC, uint(-1));
@@ -264,73 +275,73 @@ contract iTrade is ReentrancyGuard, Ownable {
   }
 
   function addCollateralWithFee(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage, uint256 fee) public nonReentrant {
-    require(isLeverage(leverage) == true, "itrade: invalid leverage parameter");
-    require(isReserve(_reserve) == true, "itrade: invalid reserve");
+    require(collateral.isLeverage(leverage) == true, "itrade: invalid leverage parameter");
+    require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
 
     IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount.add(fee));
-    _mintPrincipal(_reserve, msg.sender, _amount);
-    yERC20(getYToken(_reserve)).deposit(_amount.add(fee));
+    ledger.mintPrincipal(_reserve, msg.sender, _amount);
+    yERC20(collateral.getYToken(_reserve)).deposit(_amount.add(fee));
 
     uint256 _borrow = _amount.mul(leverage);
-    uint256 _pool = borrower(collateral).getBorrowDebt(_reserve);
+    uint256 _pool = collateral.getBorrowDebt(_reserve);
     uint256 _debt = 0;
     if (_pool == 0) {
       _debt = _borrow;
     } else {
-      _debt = (_borrow.mul(debtsTotalSupply[_reserve])).div(_pool);
+      _debt = (_borrow.mul(ledger.getTotalDebt(_reserve))).div(_pool);
     }
-    _mintDebt(_reserve, msg.sender, _debt);
-    borrower(collateral).borrowAave(_reserve, _borrow);
+    ledger.mintDebt(_reserve, msg.sender, _debt);
+    collateral.borrowAave(_reserve, _borrow);
 
-    uint8 _fromID = getCurveID(_reserve);
-    uint8 _toID = getCurveID(_to);
+    uint8 _fromID = collateral.getCurveID(_reserve);
+    uint8 _toID = collateral.getCurveID(_to);
     require(IERC20(_to).balanceOf(address(this)) == 0, "itrade: unexpected result");
     ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _borrow, _min_to_amount);
     uint256 _bought = IERC20(_to).balanceOf(address(this));
-    _mintPosition(_to, msg.sender, _bought);
+    ledger.mintPosition(_to, msg.sender, _bought);
 
-    yERC20(getYToken(_to)).deposit(_bought);
+    yERC20(collateral.getYToken(_to)).deposit(_bought);
 
     require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function withdrawCollateral(address _reserve, uint256 _amount) public nonReentrant {
-      require(isReserve(_reserve) == true, "itrade: invalid reserve");
-      require(getUserDebt(_reserve, msg.sender) == 0, "itrade: outstanding debt to settle");
+      require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
+      require(ledger.getUserDebt(_reserve, msg.sender) == 0, "itrade: outstanding debt to settle");
 
-      require(_amount <= principals[_reserve][msg.sender], "itrade: insufficient balance");
+      require(_amount <= ledger.getPrincipal(_reserve, msg.sender), "itrade: insufficient balance");
       require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
 
-      uint256 _price = yERC20(getYToken(_reserve)).getPricePerFullShare();
+      uint256 _price = yERC20(collateral.getYToken(_reserve)).getPricePerFullShare();
       uint256 _ytoken = _amount.mul(1e18).div(_price);
-      yERC20(getYToken(_reserve)).withdraw(_ytoken);
+      yERC20(collateral.getYToken(_reserve)).withdraw(_ytoken);
 
       require(IERC20(_reserve).balanceOf(address(this)) >= _amount, "itrade: unexpected result");
-      _burnPrincipal(_reserve, msg.sender, _amount);
+      ledger.burnPrincipal(_reserve, msg.sender, _amount);
 
       IERC20(_reserve).safeTransfer(msg.sender, _amount);
 
       // Cleanup dust (if any)
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
-        yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
+        yERC20(collateral.getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
 
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function repayDebtFor(address _reserve, address _user, uint256 _amount) public nonReentrant {
-    require(isReserve(_reserve) == true, "itrade: invalid reserve");
+    require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
 
-    uint256 debt = getUserDebt(_reserve, _user);
+    uint256 debt = ledger.getUserDebt(_reserve, _user);
 
     if (_amount > debt) {
       _amount = debt;
     }
 
     IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _amount);
-    uint256 shares = debts[_reserve][_user].mul(_amount).div(debt);
-    borrower(collateral).repayAave(_reserve, _amount);
-    _burnDebt(_reserve, _user, shares);
+    uint256 shares = ledger.getDebt(_reserve, _user).mul(_amount).div(debt);
+    collateral.repayAave(_reserve, _amount);
+    ledger.burnDebt(_reserve, _user, shares);
 
     require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
@@ -340,62 +351,62 @@ contract iTrade is ReentrancyGuard, Ownable {
   }
 
   function exit(address _reserve) external nonReentrant {
-      closePosition(_reserve, positions[_reserve][msg.sender]);
+      closePosition(_reserve, ledger.getPosition(_reserve,msg.sender));
       settle(_reserve);
-      withdrawCollateral(_reserve, principals[_reserve][msg.sender]);
+      withdrawCollateral(_reserve, ledger.getPrincipal(_reserve,msg.sender));
 
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function settle(address _reserve) public nonReentrant {
-      require(isReserve(_reserve) == true, "itrade: invalid reserve");
+      require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
 
       // TODO: Add in clean principal if any for reserve
-      uint256 _debt = getUserDebt(_reserve, msg.sender);
+      uint256 _debt = ledger.getUserDebt(_reserve, msg.sender);
       if (_debt > 0) {
         IERC20(_reserve).safeTransferFrom(msg.sender, address(this), _debt);
-        borrower(collateral).repayAave(_reserve, _debt);
-        _burnDebt(_reserve, msg.sender, debts[_reserve][msg.sender]);
+        collateral.repayAave(_reserve, _debt);
+        ledger.burnDebt(_reserve, msg.sender, ledger.getDebt(_reserve,msg.sender));
       }
 
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function tradePosition(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount) external nonReentrant {
-      require(isReserve(_reserve) == true, "itrade: invalid reserve");
-      require(_amount <= positions[_reserve][msg.sender], "itrade: insufficient balance");
+      require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
+      require(_amount <= ledger.getPosition(_reserve, msg.sender), "itrade: insufficient balance");
       require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
 
-      uint256 _price = yERC20(getYToken(_reserve)).getPricePerFullShare();
+      uint256 _price = yERC20(collateral.getYToken(_reserve)).getPricePerFullShare();
       uint256 _ytoken = _amount.mul(1e18).div(_price).add(1);
-      yERC20(getYToken(_reserve)).withdraw(_ytoken);
+      yERC20(collateral.getYToken(_reserve)).withdraw(_ytoken);
 
       require(IERC20(_reserve).balanceOf(address(this)) >= _amount, "itrade: unexpected result");
       require(IERC20(_to).balanceOf(address(this)) == 0, "itrade: unexpected result");
 
-      uint8 _fromID = getCurveID(_reserve);
-      uint8 _toID = getCurveID(_to);
+      uint8 _fromID = collateral.getCurveID(_reserve);
+      uint8 _toID = collateral.getCurveID(_to);
 
       ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _amount, _min_to_amount);
-      _burnPosition(_reserve, msg.sender, _amount);
+      ledger.burnPosition(_reserve, msg.sender, _amount);
       uint256 _bought = IERC20(_to).balanceOf(address(this));
-      _mintPosition(_to, msg.sender, _bought);
-      yERC20(getYToken(_to)).deposit(_bought);
+      ledger.mintPosition(_to, msg.sender, _bought);
+      yERC20(collateral.getYToken(_to)).deposit(_bought);
 
       // Cleanup dust (if any)
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
-        yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
+        yERC20(collateral.getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
 
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
   function closePosition(address _reserve, uint256 _amount) public nonReentrant {
-      require(isReserve(_reserve) == true, "itrade: invalid reserve");
-      require(_amount <= positions[_reserve][msg.sender], "itrade: insufficient balance");
+      require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
+      require(_amount <= ledger.getPosition(_reserve,msg.sender), "itrade: insufficient balance");
       require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
 
-      uint256 debt = getUserDebt(_reserve, msg.sender);
+      uint256 debt = ledger.getUserDebt(_reserve, msg.sender);
       uint256 ret = 0;
 
       if (_amount > debt) {
@@ -403,14 +414,14 @@ contract iTrade is ReentrancyGuard, Ownable {
         _amount = debt;
       }
 
-      uint256 _price = yERC20(getYToken(_reserve)).getPricePerFullShare();
+      uint256 _price = yERC20(collateral.getYToken(_reserve)).getPricePerFullShare();
       uint256 _ytoken = _amount.mul(1e18).div(_price).add(1);
-      yERC20(getYToken(_reserve)).withdraw(_ytoken);
+      yERC20(collateral.getYToken(_reserve)).withdraw(_ytoken);
 
       if (debt > 0) {
-        uint256 shares = debts[_reserve][msg.sender].mul(_amount).div(debt);
-        borrower(collateral).repayAave(_reserve, _amount);
-        _burnDebt(_reserve, msg.sender, shares);
+        uint256 shares = ledger.getDebt(_reserve,msg.sender).mul(_amount).div(debt);
+        collateral.repayAave(_reserve, _amount);
+        ledger.burnDebt(_reserve, msg.sender, shares);
       }
 
       // Profits from trade
@@ -418,31 +429,14 @@ contract iTrade is ReentrancyGuard, Ownable {
         IERC20(_reserve).safeTransfer(msg.sender, ret);
       }
 
-      _burnPosition(_reserve, msg.sender, _amount);
+      ledger.burnPosition(_reserve, msg.sender, _amount);
 
       // Cleanup dust (if any)
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
-        yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
+        yERC20(collateral.getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
 
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
-  }
-
-  function isSafe(address _user) public view returns (bool) {
-      uint256 _debt = getAllDebt(_user);
-      uint256 _position = totalPositions[_user];
-      uint256 _collateral = totalPrincipals[_user];
-      if (_position >= _debt) {
-        return true;
-      } else {
-        uint256 _diff = _debt.sub(_position);
-        uint256 _adjDebt = _diff.mul(ltv).div(base);
-        if (_collateral >= _adjDebt) {
-          return true;
-        } else {
-          return false;
-        }
-      }
   }
 
   function seize(address _user) external nonReentrant {
@@ -457,122 +451,42 @@ contract iTrade is ReentrancyGuard, Ownable {
   }
 
   function _seizeReserve(address _reserve, address _user) internal {
-      uint256 _principal = principals[_reserve][_user];
+      uint256 _principal = ledger.getPrincipal(_reserve,_user);
       if (_principal > 0) {
-        uint256 _debt = debts[_reserve][_user];
-        uint256 _position = positions[_reserve][_user];
+        uint256 _debt = ledger.getDebt(_reserve,_user);
+        uint256 _position = ledger.getPosition(_reserve,_user);
 
-        _mintPrincipal(_reserve, _user, _principal);
-        _burnDebt(_reserve, _user, _debt);
-        _burnPosition(_reserve, _user, _position);
+        ledger.mintPrincipal(_reserve, _user, _principal);
+        ledger.burnDebt(_reserve, _user, _debt);
+        ledger.burnPosition(_reserve, _user, _position);
 
-        _mintPrincipal(_reserve, msg.sender, _principal);
-        _mintDebt(_reserve, msg.sender, _debt);
-        _mintPosition(_reserve, msg.sender, _position);
+        ledger.mintPrincipal(_reserve, msg.sender, _principal);
+        ledger.mintDebt(_reserve, msg.sender, _debt);
+        ledger.mintPosition(_reserve, msg.sender, _position);
+      }
+  }
+
+  function isSafe(address _user) public view returns (bool) {
+      uint256 _debt = getAllDebt(_user);
+      uint256 _position = ledger.getTotalPosition(_user);
+      uint256 _collateral = ledger.getTotalPrincipal(_user);
+      if (_position >= _debt) {
+        return true;
+      } else {
+        uint256 _diff = _debt.sub(_position);
+        uint256 _adjDebt = _diff.mul(ltv).div(base);
+        if (_collateral >= _adjDebt) {
+          return true;
+        } else {
+          return false;
+        }
       }
   }
 
   function getAllDebt(address _user) public view returns (uint256) {
-      return getUserDebt(DAI, _user).add(getUserDebt(USDC, _user)).add(getUserDebt(USDT, _user));
+      return ledger.getUserDebt(DAI, _user).add(ledger.getUserDebt(USDC, _user)).add(ledger.getUserDebt(USDT, _user));
   }
 
-  function getUserDebt(address _reserve, address _user) public view returns (uint256) {
-      if (debtsTotalSupply[_reserve] == 0) {
-        return 0;
-      } else {
-        return borrower(collateral).getBorrowDebt(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
-      }
-  }
-  function getUserInterest(address _reserve, address _user) public view returns (uint256) {
-      if (debtsTotalSupply[_reserve] == 0) {
-        return 0;
-      } else {
-        return borrower(collateral).getBorrowInterest(_reserve).mul(debts[_reserve][_user]).div(debtsTotalSupply[_reserve]);
-      }
-  }
-  function _mintDebt(address _reserve, address account, uint256 amount) internal {
-      require(account != address(0), "Debt: mint to the zero address");
-      debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].add(amount);
-      debts[_reserve][account] = debts[_reserve][account].add(amount);
-  }
-  function _burnDebt(address _reserve, address account, uint256 amount) internal {
-      require(account != address(0), "Debt: burn from the zero address");
-      debts[_reserve][account] = debts[_reserve][account].sub(amount, "Debt: burn amount exceeds balance");
-      debtsTotalSupply[_reserve] = debtsTotalSupply[_reserve].sub(amount);
-  }
-  function _mintPrincipal(address _reserve, address account, uint256 amount) internal {
-      require(account != address(0), "Principal: mint to the zero address");
-      totalPrincipals[_reserve] = totalPrincipals[_reserve].add(amount);
-      principals[_reserve][account] = principals[_reserve][account].add(amount);
-  }
-  function _burnPrincipal(address _reserve, address account, uint256 amount) internal {
-      require(account != address(0), "Principal: burn from the zero address");
-      principals[_reserve][account] = principals[_reserve][account].sub(amount, "Principal: burn amount exceeds balance");
-      totalPrincipals[_reserve] = totalPrincipals[_reserve].sub(amount);
-  }
-  function _mintPosition(address _reserve, address account, uint256 amount) internal {
-      require(account != address(0), "Position: mint to the zero address");
-      totalPositions[_reserve] = totalPositions[_reserve].add(amount);
-      positions[_reserve][account] = positions[_reserve][account].add(amount);
-  }
-  function _burnPosition(address _reserve, address account, uint256 amount) internal {
-      require(account != address(0), "Position: burn from the zero address");
-      positions[_reserve][account] = positions[_reserve][account].sub(amount, "Position: burn amount exceeds balance");
-      totalPositions[_reserve] = totalPositions[_reserve].sub(amount);
-  }
-  function getYToken(address _reserve) public pure returns (address) {
-      if (_reserve == DAI) {
-        return yDAI;
-      } else if (_reserve == USDC) {
-        return yUSDC;
-      } else if (_reserve == USDT) {
-        return yUSDT;
-      /*} else if (_reserve == TUSD) {
-        return yTUSD;*/
-      } else {
-        return address(0x0);
-      }
-  }
-  function getCurveID(address _reserve) public pure returns (uint8) {
-      if (_reserve == DAI) {
-        return uint8(0);
-      } else if (_reserve == USDC) {
-        return uint8(1);
-      } else if (_reserve == USDT) {
-        return uint8(2);
-      /*} else if (_reserve == TUSD) {
-        return uint8(3);*/
-      } else {
-        return uint8(0);
-      }
-  }
-  function isReserve(address _reserve) public pure returns (bool) {
-      if (_reserve == DAI) {
-        return true;
-      } else if (_reserve == USDC) {
-        return true;
-      } else if (_reserve == USDT) {
-        return true;
-    /*  } else if (_reserve == TUSD) {
-        return true;*/
-      } else {
-        return false;
-      }
-  }
-  function isLeverage(uint256 leverage) public pure returns (bool) {
-      if (leverage == 2||
-        leverage == 5||
-        leverage == 10||
-        leverage == 25||
-        leverage == 50||
-        leverage == 75||
-        leverage == 100||
-        leverage == 1000) {
-        return true;
-      } else {
-        return false;
-      }
-  }
   // incase of half-way error
   function inCaseTokenGetsStuck(IERC20 _TokenAddress) onlyOwner public {
       uint qty = _TokenAddress.balanceOf(address(this));

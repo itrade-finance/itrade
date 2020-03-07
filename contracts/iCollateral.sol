@@ -308,20 +308,26 @@ contract iCollateral is ERC20, ERC20Detailed, ReentrancyGuard, Ownable {
   uint256 public maxBorrowBase;
   address public trader;
 
+  address public constant yDAI = address(0x16de59092dAE5CcF4A1E6439D611fd0653f0Bd01);
+  address public constant yUSDC = address(0xd6aD7a6750A7593E092a9B218d66C0A814a3436e);
+  address public constant yUSDT = address(0x83f798e925BcD4017Eb265844FDDAbb448f1707D);
+  address public constant yTUSD = address(0x73a052500105205d34Daf004eAb301916DA8190f);
+
   address public constant DAI = address(0x6B175474E89094C44Da98b954EedeAC495271d0F);
   address public constant USDC = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
   address public constant USDT = address(0xdAC17F958D2ee523a2206206994597C13D831ec7);
+  address public constant TUSD = address(0x0000000000085d4780B73119b644AE5ecd22b376);
 
   modifier onlyTrader() {
       require(trader == msg.sender, "itrade: caller is not the trader");
       _;
   }
-  function transferTrader(address newOwner) public onlyOwner {
-      _transferTrader(newOwner);
+  function transferTrader(address newTrader) public onlyOwner {
+      _transferTrader(newTrader);
   }
-  function _transferTrader(address newOwner) internal {
-      require(newOwner != address(0), "itrade: new trader is the zero address");
-      trader = newOwner;
+  function _transferTrader(address newTrader) internal {
+      require(newTrader != address(0), "itrade: new trader is the zero address");
+      trader = newTrader;
   }
 
   constructor() public ERC20Detailed("itrade y.curve.fi", "y.curve.fi", 18) {
@@ -474,10 +480,50 @@ contract iCollateral is ERC20, ERC20Detailed, ReentrancyGuard, Ownable {
         return true;
       } else if (_reserve == USDT) {
         return true;
-    /*  } else if (_reserve == TUSD) {
-        return true;*/
+      } else if (_reserve == TUSD) {
+        return true;
       } else {
         return false;
+      }
+  }
+  function isLeverage(uint256 leverage) public pure returns (bool) {
+      if (leverage == 2||
+        leverage == 5||
+        leverage == 10||
+        leverage == 25||
+        leverage == 50||
+        leverage == 75||
+        leverage == 100||
+        leverage == 1000) {
+        return true;
+      } else {
+        return false;
+      }
+  }
+  function getCurveID(address _reserve) public pure returns (uint8) {
+      if (_reserve == DAI) {
+        return uint8(0);
+      } else if (_reserve == USDC) {
+        return uint8(1);
+      } else if (_reserve == USDT) {
+        return uint8(2);
+      } else if (_reserve == TUSD) {
+        return uint8(3);
+      } else {
+        return uint8(0);
+      }
+  }
+  function getYToken(address _reserve) public pure returns (address) {
+      if (_reserve == DAI) {
+        return yDAI;
+      } else if (_reserve == USDC) {
+        return yUSDC;
+      } else if (_reserve == USDT) {
+        return yUSDT;
+      } else if (_reserve == TUSD) {
+        return yTUSD;
+      } else {
+        return address(0x0);
       }
   }
   // incase of half-way error
