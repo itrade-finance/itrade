@@ -259,11 +259,11 @@ contract iTrade is ReentrancyGuard, Ownable {
       IERC20(USDT).safeApprove(yCurveSwap, uint(-1));
   }
 
-  function addCollateral(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage) external {
+  function addCollateral(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage) external nonReentrant {
     addCollateralWithFee(_reserve, _to, _amount, _min_to_amount, leverage, 0);
   }
 
-  function addCollateralWithFee(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage, uint256 fee) public {
+  function addCollateralWithFee(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage, uint256 fee) public nonReentrant {
     require(isLeverage(leverage) == true, "itrade: invalid leverage parameter");
     require(isReserve(_reserve) == true, "itrade: invalid reserve");
 
@@ -296,7 +296,7 @@ contract iTrade is ReentrancyGuard, Ownable {
     require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function withdrawCollateral(address _reserve, uint256 _amount) public {
+  function withdrawCollateral(address _reserve, uint256 _amount) public nonReentrant {
       require(isReserve(_reserve) == true, "itrade: invalid reserve");
       require(getUserDebt(_reserve, msg.sender) == 0, "itrade: outstanding debt to settle");
 
@@ -321,7 +321,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function repayDebtFor(address _reserve, address _user, uint256 _amount) public {
+  function repayDebtFor(address _reserve, address _user, uint256 _amount) public nonReentrant {
     require(isReserve(_reserve) == true, "itrade: invalid reserve");
 
     uint256 debt = getUserDebt(_reserve, _user);
@@ -338,11 +338,11 @@ contract iTrade is ReentrancyGuard, Ownable {
     require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function repayDebt(address _reserve, uint256 _amount) public {
+  function repayDebt(address _reserve, uint256 _amount) public nonReentrant {
       repayDebtFor(_reserve, msg.sender, _amount);
   }
 
-  function exit(address _reserve) external {
+  function exit(address _reserve) external nonReentrant {
       closePosition(_reserve, positions[_reserve][msg.sender]);
       settle(_reserve);
       withdrawCollateral(_reserve, principals[_reserve][msg.sender]);
@@ -350,7 +350,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function settle(address _reserve) public {
+  function settle(address _reserve) public nonReentrant {
       require(isReserve(_reserve) == true, "itrade: invalid reserve");
 
       // TODO: Add in clean principal if any for reserve
@@ -364,7 +364,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function tradePosition(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount) external {
+  function tradePosition(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount) external nonReentrant {
       require(isReserve(_reserve) == true, "itrade: invalid reserve");
       require(_amount <= positions[_reserve][msg.sender], "itrade: insufficient balance");
       require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
@@ -395,7 +395,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
-  function closePosition(address _reserve, uint256 _amount) public {
+  function closePosition(address _reserve, uint256 _amount) public nonReentrant {
       require(isReserve(_reserve) == true, "itrade: invalid reserve");
       require(_amount <= positions[_reserve][msg.sender], "itrade: insufficient balance");
       require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
@@ -451,8 +451,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       }
   }
 
-
-  function seize(address _user) public {
+  function seize(address _user) external nonReentrant {
       require(isSafe(_user) == false, "itrade: account is safe");
 
       _seizeReserve(DAI, _user);
