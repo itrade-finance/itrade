@@ -180,7 +180,7 @@ library SafeERC20 {
 }
 
 interface ICurveFi {
-  function exchange_underlying(
+  function exchange(
     int128 from, int128 to, uint256 _from_amount, uint256 _min_to_amount
   ) external;
 }
@@ -249,7 +249,7 @@ contract iTrade is ReentrancyGuard, Ownable {
   function setCollateral(iBorrower _collateral) external onlyOwner {
     collateral = iBorrower(_collateral);
   }
-  function setLedger(iLeder _ledger) external onlyOwner {
+  function setLedger(iLedger _ledger) external onlyOwner {
     ledger = iLedger(_ledger);
   }
 
@@ -281,6 +281,20 @@ contract iTrade is ReentrancyGuard, Ownable {
     addCollateralWithFee(_reserve, _to, _amount, _min_to_amount, leverage, 0);
   }
 
+  struct AddCollateralLocalVars {
+    uint256 _yTokenBefore;
+    uint256 _yTokenAfter;
+    uint256 _toSell;
+    uint8 _fromID;
+    uint8 _toID;
+    uint256 _toPrice;
+    uint256 _toYtoken;
+    uint256 _boughtBefore;
+    uint256 _boughtAfter;
+    uint256 _bought;
+    uint256 _boughtUnderlying;
+  }
+
   function addCollateralWithFee(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount, uint256 leverage, uint256 fee) public nonReentrant {
     require(collateral.isLeverage(leverage) == true, "itrade: invalid leverage parameter");
     require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
@@ -300,14 +314,26 @@ contract iTrade is ReentrancyGuard, Ownable {
     ledger.mintDebt(_reserve, msg.sender, _debt);
     collateral.borrowAave(_reserve, _borrow);
 
-    uint8 _fromID = collateral.getCurveID(_reserve);
-    uint8 _toID = collateral.getCurveID(_to);
-    require(IERC20(_to).balanceOf(address(this)) == 0, "itrade: unexpected result");
-    ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _borrow, _min_to_amount);
-    uint256 _bought = IERC20(_to).balanceOf(address(this));
-    ledger.mintPosition(_to, msg.sender, _bought);
+    AddCollateralLocalVars memory vars;
 
-    yERC20(collateral.getYToken(_to)).deposit(_bought);
+    vars._yTokenBefore = IERC20(collateral.getYToken(_reserve)).balanceOf(address(this));
+    yERC20(collateral.getYToken(_reserve)).deposit(_borrow);
+    vars._yTokenAfter = IERC20(collateral.getYToken(_reserve)).balanceOf(address(this));
+    vars._toSell = vars._yTokenAfter.sub(vars._yTokenBefore);
+
+    vars._fromID = collateral.getCurveID(_reserve);
+    vars._toID = collateral.getCurveID(_to);
+
+    vars._toPrice = yERC20(collateral.getYToken(_to)).getPricePerFullShare();
+    vars._toYtoken = _min_to_amount.mul(1e18).div(vars._toPrice).add(1);
+
+    vars._boughtBefore = IERC20(collateral.getYToken(_to)).balanceOf(address(this));
+    ICurveFi(yCurveSwap).exchange(vars._fromID, vars._toID, vars._toSell, vars._toYtoken);
+    vars._boughtAfter = IERC20(collateral.getYToken(_to)).balanceOf(address(this));
+    vars._bought = vars._boughtAfter.sub(vars._boughtBefore);
+    vars._boughtUnderlying = vars._bought.mul(vars._toPrice).div(1e18);
+    ledger.mintPosition(_to, msg.sender, vars._boughtUnderlying);
+    require(vars._boughtUnderlying >= _min_to_amount, "itrade: underlying slippage");
 
     require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
@@ -379,31 +405,58 @@ contract iTrade is ReentrancyGuard, Ownable {
       require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
+  struct TradePositionLocalVars {
+    uint256 _fromPrice;
+    uint256 _fromYtoken;
+    uint256 _toPrice;
+    uint256 _toYtoken;
+    uint8 _fromID;
+    uint8 _toID;
+    uint256 _boughtBefore;
+    uint256 _soldBefore;
+    uint256 _boughtAfter;
+    uint256 _soldAfter;
+    uint256 _bought;
+    uint256 _sold;
+    uint256 _boughtUnderlying;
+    uint256 _soldUnderlying;
+  }
+
+  // Change trade position to use yTokens instead (to avoid locked up underlying collateral)
   function tradePosition(address _reserve, address _to, uint256 _amount, uint256 _min_to_amount) external nonReentrant {
       require(collateral.isReserve(_reserve) == true, "itrade: invalid reserve");
       require(_amount <= ledger.getPosition(_reserve, msg.sender), "itrade: insufficient balance");
-      require(IERC20(_reserve).balanceOf(address(this)) == 0, "itrade: unexpected result");
 
-      uint256 _price = yERC20(collateral.getYToken(_reserve)).getPricePerFullShare();
-      uint256 _ytoken = _amount.mul(1e18).div(_price).add(1);
-      yERC20(collateral.getYToken(_reserve)).withdraw(_ytoken);
+      TradePositionLocalVars memory vars;
 
-      require(IERC20(_reserve).balanceOf(address(this)) >= _amount, "itrade: unexpected result");
-      require(IERC20(_to).balanceOf(address(this)) == 0, "itrade: unexpected result");
+      vars._fromPrice = yERC20(collateral.getYToken(_reserve)).getPricePerFullShare();
+      vars._fromYtoken = _amount.mul(1e18).div(vars._fromPrice).add(1);
 
-      uint8 _fromID = collateral.getCurveID(_reserve);
-      uint8 _toID = collateral.getCurveID(_to);
+      vars._toPrice = yERC20(collateral.getYToken(_to)).getPricePerFullShare();
+      vars._toYtoken = _min_to_amount.mul(1e18).div(vars._toPrice).add(1);
 
-      ICurveFi(yCurveSwap).exchange_underlying(_fromID, _toID, _amount, _min_to_amount);
-      ledger.burnPosition(_reserve, msg.sender, _amount);
-      uint256 _bought = IERC20(_to).balanceOf(address(this));
-      ledger.mintPosition(_to, msg.sender, _bought);
-      yERC20(collateral.getYToken(_to)).deposit(_bought);
+      vars._fromID = collateral.getCurveID(_reserve);
+      vars._toID = collateral.getCurveID(_to);
 
-      // Cleanup dust (if any)
-      if (IERC20(_reserve).balanceOf(address(this)) > 0) {
-        yERC20(collateral.getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
-      }
+      vars._boughtBefore = IERC20(collateral.getYToken(_to)).balanceOf(address(this));
+      vars._soldBefore = IERC20(collateral.getYToken(_reserve)).balanceOf(address(this));
+
+      ICurveFi(yCurveSwap).exchange(vars._fromID, vars._toID, vars._fromYtoken, vars._toYtoken);
+
+      vars._boughtAfter = IERC20(collateral.getYToken(_to)).balanceOf(address(this));
+      vars._soldAfter = IERC20(collateral.getYToken(_reserve)).balanceOf(address(this));
+
+      vars._bought = vars._boughtAfter.sub(vars._boughtBefore);
+      vars._sold = vars._soldBefore.sub(vars._soldAfter);
+
+      vars._boughtUnderlying = vars._bought.mul(vars._toPrice).div(1e18);
+      vars._soldUnderlying = vars._sold.mul(vars._fromPrice).div(1e18);
+
+      require(vars._soldUnderlying <= _amount, "itrade: sold more than expected");
+      require(vars._boughtUnderlying >= _min_to_amount, "itrade: underlying slippage");
+
+      ledger.burnPosition(_reserve, msg.sender, vars._soldUnderlying);
+      ledger.mintPosition(_to, msg.sender, vars._boughtUnderlying);
 
       require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
