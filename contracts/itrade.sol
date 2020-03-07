@@ -505,6 +505,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       _seizeReserve(DAI, _user);
       _seizeReserve(USDC, _user);
       _seizeReserve(USDT, _user);
+      _seizeReserve(TUSD, _user);
 
       require(ledger.isSafe(msg.sender) == true, "itrade: account would liquidate");
       require(ledger.isSafe(_user) == true, "itrade: account would liquidate");

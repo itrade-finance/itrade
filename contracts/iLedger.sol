@@ -284,7 +284,6 @@ contract iLedger is ReentrancyGuard, Ownable {
         .add(getUserDebt(USDT, _user))
         .add(getUserDebt(TUSD, _user));
   }
-
   function getUserDebt(address _reserve, address _user) public view returns (uint256) {
       if (debtsTotalSupply[_reserve] == 0) {
         return 0;
