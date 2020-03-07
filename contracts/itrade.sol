@@ -288,6 +288,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       totalPositions[msg.sender] = totalPositions[msg.sender].add(_bought);
 
       yERC20(getYToken(_to)).deposit(_bought);
+
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
@@ -312,6 +313,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
         yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
+
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
@@ -328,6 +330,7 @@ contract iTrade is ReentrancyGuard, Ownable {
     uint256 shares = debts[_reserve][_user].mul(_amount).div(debt);
     borrower(collateral).repayAave(_reserve, _amount);
     _burnDebt(_reserve, _user, shares);
+
     require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
@@ -339,6 +342,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       closePosition(_reserve, positions[_reserve][msg.sender]);
       settle(_reserve);
       withdrawCollateral(_reserve, principals[_reserve][msg.sender]);
+
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
@@ -352,6 +356,7 @@ contract iTrade is ReentrancyGuard, Ownable {
         borrower(collateral).repayAave(_reserve, _debt);
         _burnDebt(_reserve, msg.sender, debts[_reserve][msg.sender]);
       }
+
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
@@ -382,6 +387,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
         yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
+
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
@@ -420,6 +426,7 @@ contract iTrade is ReentrancyGuard, Ownable {
       if (IERC20(_reserve).balanceOf(address(this)) > 0) {
         yERC20(getYToken(_reserve)).deposit(IERC20(_reserve).balanceOf(address(this)));
       }
+
       require(isSafe(msg.sender) == true, "itrade: account would liquidate");
   }
 
@@ -440,15 +447,46 @@ contract iTrade is ReentrancyGuard, Ownable {
       }
   }
 
+
   function seize(address _user) public {
       require(isSafe(_user) == false, "itrade: account is safe");
-      // Pay off fees with collateral
-      // Take position (and debt)
 
+      _seizeReserve(DAI, _user);
+      _seizeReserve(USDC, _user);
+      _seizeReserve(USDT, _user);
+
+      require(isSafe(msg.sender) == true, "itrade: account would liquidate");
+      require(isSafe(_user) == true, "itrade: account would liquidate");
+  }
+
+  function _seizeReserve(address _reserve, address _user) internal {
+      uint256 _principal = principals[_reserve][_user];
+      if (_principal > 0) {
+        uint256 _debt = debts[_reserve][_user];
+        uint256 _position = positions[_reserve][_user];
+
+        principals[_reserve][_user] = principals[_reserve][_user].sub(_principal);
+        totalPrincipals[_user] = totalPrincipals[_user].sub(_principal);
+
+        debts[_reserve][_user] = debts[_reserve][_user].sub(_debt);
+        debtsTotalSupply[_user] = debtsTotalSupply[_user].sub(_debt);
+
+        positions[_reserve][_user] = positions[_reserve][_user].sub(_position);
+        totalPositions[_user] = totalPositions[_user].sub(_position);
+
+        principals[_reserve][msg.sender] = principals[_reserve][msg.sender].add(_principal);
+        totalPrincipals[msg.sender] = totalPrincipals[msg.sender].add(_principal);
+
+        debts[_reserve][msg.sender] = debts[_reserve][msg.sender].add(_debt);
+        debtsTotalSupply[msg.sender] = debtsTotalSupply[msg.sender].add(_debt);
+
+        positions[_reserve][msg.sender] = positions[_reserve][msg.sender].add(_position);
+        totalPositions[msg.sender] = totalPositions[msg.sender].add(_position);
+      }
   }
 
   function getAllDebt(address _user) public view returns (uint256) {
-    return getUserDebt(DAI, _user).add(getUserDebt(USDC, _user)).add(getUserDebt(USDT, _user));
+      return getUserDebt(DAI, _user).add(getUserDebt(USDC, _user)).add(getUserDebt(USDT, _user));
   }
 
   function getUserDebt(address _reserve, address _user) public view returns (uint256) {
